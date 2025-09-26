@@ -1,0 +1,14 @@
+# JAX PPO训练脚本依赖
+jax>=0.4.0
+jaxlib>=0.4.0
+flax>=0.7.0
+optax>=0.1.0
+gymnasium>=0.29.0
+numpy>=1.21.0
+matplotlib>=3.5.0
+tqdm>=4.64.0
+
+
+
+
+

@@ -53,5 +53,16 @@ class AlohaRealEnvironment(_environment.Environment):
         }
 
     @override
+    def get_reward(self) -> dict:
+        if self._ts is None:
+            raise RuntimeError("Timestep is not set. Call reset() first.")
+        reward = 1
+        return reward
+
+        # return {
+        #     "reward": reward
+        # }
+
+    @override
     def apply_action(self, action: dict) -> None:
         self._ts = self._env.step(action["actions"])

@@ -8,12 +8,16 @@ import flax.nnx.bridge as nnx_bridge
 import jax
 import jax.numpy as jnp
 from typing_extensions import override
+from typing import Tuple
 
 from openpi.models import model as _model
 import openpi.models.gemma_fast as _gemma
 import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
+
+import openpi.models.gemma_fast as _gemma
+
 
 logger = logging.getLogger("openpi")
 
@@ -157,6 +161,27 @@ class Pi0FAST(_model.BaseModel):
         self.PaliGemma = nnx.Dict(llm=llm, img=img)
 
     @at.typecheck
+    def _get_pre_logits(
+        self, observation: _model.Observation, train: bool, rng: at.KeyArrayLike | None = None
+    ) -> Tuple[at.Array, at.Array, at.Array, at.Array]:
+        """Helper to get pre_logits from an observation."""
+        observation = _model.preprocess_observation(
+            rng, observation, train=train, image_keys=list(observation.images.keys())
+        )
+
+        # Compute inputs: one big forward pass of prefix + suffix at once
+        input_token_embeddings, input_mask, ar_mask = self.embed_inputs(observation)
+        attn_mask = make_attn_mask(input_mask, ar_mask)
+
+        # Each input predicts *next* token, so we don't input the last token.
+        pre_logits, _, _ = self.PaliGemma.llm(
+            embedded_prefix=input_token_embeddings[:, :-1],
+            mask=attn_mask[:, :-1, :-1],
+            return_prelogits=True,
+        )
+        return pre_logits, observation, input_token_embeddings, attn_mask
+
+    @at.typecheck
     def embed_inputs(
         self, obs: _model.Observation
     ) -> tuple[at.Float[at.Array, "b s emb"], at.Bool[at.Array, "b s"], at.Int[at.Array, "b s"]]:
@@ -198,25 +223,12 @@ class Pi0FAST(_model.BaseModel):
     def compute_loss(
         self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
     ) -> at.Float[at.Array, "*b ah"]:
-        observation = _model.preprocess_observation(
-            rng, observation, train=train, image_keys=list(observation.images.keys())
-        )
-
-        # Compute inputs: one big forward pass of prefix + suffix at once
-        input_token_embeddings, input_mask, ar_mask = self.embed_inputs(observation)
-        attn_mask = make_attn_mask(input_mask, ar_mask)
+        pre_logits, observation, _, _ = self._get_pre_logits(observation, train=train, rng=rng)
 
         # Compute one-hot targets: we predict *next* token, so shift the input tokens by one.
         targets = jax.nn.one_hot(
             observation.tokenized_prompt[:, 1:],
             self.PaliGemma.llm.module.vocab_size,
-        )
-
-        # Each input predicts *next* token, so we don't input the last token.
-        pre_logits, _, _ = self.PaliGemma.llm(
-            embedded_prefix=input_token_embeddings[:, :-1],
-            mask=attn_mask[:, :-1, :-1],
-            return_prelogits=True,
         )
 
         # Only decode logits for the target tokens to save memory
@@ -311,3 +323,4 @@ class Pi0FAST(_model.BaseModel):
             cond, step, (rng, last_logit, output_tokens, kv_cache, False, 0)
         )
         return output_tokens
+
